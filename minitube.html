@@ -1,80 +1,130 @@
-function addVideo(file) {
-  const url = URL.createObjectURL(file);
-  
-  const card = document.createElement('div');
-  card.className = 'video-card';
-  
-  const thumb = document.createElement('div');
-  thumb.className = 'thumbnail';
-  
-  // Показываем само видео как превью (можно заменить на скриншот позже)
-  const vid = document.createElement('video');
-  vid.src = url;
-  vid.muted = true;
-  vid.playsInline = true;
-  vid.loop = true;
-  vid.autoplay = true;
-  thumb.appendChild(vid);
-  
-  const dur = document.createElement('div');
-  dur.className = 'duration';
-  dur.textContent = '•••'; // пока без реальной длительности
-  thumb.appendChild(dur);
-  
-  const info = document.createElement('div');
-  info.className = 'info';
-  
-  const title = document.createElement('div');
-  title.className = 'title';
-  title.textContent = file.name.replace(/\.[^/.]+$/, "");
-  
-  const channel = document.createElement('div');
-  channel.className = 'channel';
-  channel.textContent = 'Ты';
-  
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  meta.textContent = 'Только что • 1 просмотр';
-  
-  info.append(title, channel, meta);
-  card.append(thumb, info);
-  
-  card.onclick = () => playVideo(url, file.name);
-  
-  grid.prepend(card);
-  
-  videos.push({ url, name: file.name, card });
-}
+package main
 
-function playVideo(url, title) {
-  videoElement.src = url;
-  videoElement.title = title;
-  player.style.display = 'flex';
-  videoElement.play().catch(() => {});
-}
+import (
+ "fmt"
+ "io"
+ "log"
+ "net/http"
+ "os"
+ "path/filepath"
+ "sync"
+ "time"
 
-function closePlayer(e) {
-  if (e.target === player || e.target === videoElement) {
-    player.style.display = 'none';
-    videoElement.pause();
-    videoElement.src = '';
+ "github.com/gin-gonic/gin"
+)
+
+const (
+ uploadDir   = "./uploads"
+ maxFileSize = 500 << 20 // 500 MB
+)
+
+var (
+ mu            sync.Mutex
+ uploadedFiles = make(map[string]string) // filename → original name
+)
+
+func main() {
+ if err := os.MkdirAll(uploadDir, 0755); err != nil {
+  log.Fatal(err)
+ }
+
+ r := gin.Default()
+
+ r.Use(func(c *gin.Context) {
+  c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+  c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+  c.Writer.Header().Set("Access-Control-Allow-Headers", "*")
+  if c.Request.Method == "OPTIONS" {
+   c.AbortWithStatus(204)
+   return
   }
+  c.Next()
+ })
+
+ r.GET("/", func(c *gin.Context) {
+  c.String(http.StatusOK, "POST /upload    → upload video (multipart field: video)\nGET  /videos    → list uploaded files\nGET  /play/:name → stream video")
+ })
+
+ r.POST("/upload", handleUpload)
+
+ r.GET("/videos", func(c *gin.Context) {
+  mu.Lock()
+  defer mu.Unlock()
+
+  files := make([]string, 0, len(uploadedFiles))
+  for name := range uploadedFiles {
+   files = append(files, name)
+  }
+
+  c.JSON(http.StatusOK, gin.H{
+   "files": files,
+   "count": len(files),
+  })
+ })
+
+ r.GET("/play/:filename", func(c *gin.Context) {
+  filename := c.Param("filename")
+  path := filepath.Join(uploadDir, filename)
+
+  if _, err := os.Stat(path); os.IsNotExist(err) {
+   c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+   return
+  }
+
+  c.Header("Content-Type", "video/mp4")
+  c.Header("Accept-Ranges", "bytes")
+  c.File(path)
+ })
+
+ log.Println("server running on :8080")
+ log.Fatal(r.Run(":8080"))
 }
 
-document.getElementById('video-file').onchange = e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (!file.type.startsWith('video/')) {
-    alert('Выберите видеофайл');
-    return;
-  }
-  addVideo(file);
-  e.target.value = ''; // чтобы можно было загрузить тот же файл повторно
-};
+func handleUpload(c *gin.Context) {
+ c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxFileSize)
 
-// Пример: можно сразу добавить тестовое видео, если хочешь
-// addVideo(new File([], "test.mp4")); // заглушка
+ file, header, err := c.Request.FormFile("video")
+ if err != nil {
+  c.JSON(http.StatusBadRequest, gin.H{"error": "missing or invalid video field"})
+  return
+ }
+ defer file.Close()
 
-</script>
-</body>
-</html>
+ if header.Size > maxFileSize {
+  c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large (max 500 MB)"})
+  return
+ }
+
+ ext := filepath.Ext(header.Filename)
+ if ext != ".mp4" && ext != ".webm" {
+  c.JSON(http.StatusBadRequest, gin.H{"error": "only .mp4 and .webm allowed"})
+  return
+ }
+
+ timestamp := time.Now().Format("20060102-150405")
+ safeName := fmt.Sprintf("%s%s", timestamp, ext)
+ fullPath := filepath.Join(uploadDir, safeName)
+
+ out, err := os.Create(fullPath)
+ if err != nil {
+  c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot create file"})
+  return
+ }
+ defer out.Close()
+
+ _, err = io.Copy(out, file)
+ if err != nil {
+  c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot save file"})
+  return
+ }
+
+ mu.Lock()
+ uploadedFiles[safeName] = header.Filename
+ mu.Unlock()
+
+ c.JSON(http.StatusOK, gin.H{
+  "message":  "upload successful",
+  "filename": safeName,
+  "url":      fmt.Sprintf("http://localhost:8080/play/%s", safeName),
+ })
+}
