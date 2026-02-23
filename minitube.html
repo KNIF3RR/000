@@ -1,0 +1,80 @@
+function addVideo(file) {
+  const url = URL.createObjectURL(file);
+  
+  const card = document.createElement('div');
+  card.className = 'video-card';
+  
+  const thumb = document.createElement('div');
+  thumb.className = 'thumbnail';
+  
+  // Показываем само видео как превью (можно заменить на скриншот позже)
+  const vid = document.createElement('video');
+  vid.src = url;
+  vid.muted = true;
+  vid.playsInline = true;
+  vid.loop = true;
+  vid.autoplay = true;
+  thumb.appendChild(vid);
+  
+  const dur = document.createElement('div');
+  dur.className = 'duration';
+  dur.textContent = '•••'; // пока без реальной длительности
+  thumb.appendChild(dur);
+  
+  const info = document.createElement('div');
+  info.className = 'info';
+  
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = file.name.replace(/\.[^/.]+$/, "");
+  
+  const channel = document.createElement('div');
+  channel.className = 'channel';
+  channel.textContent = 'Ты';
+  
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = 'Только что • 1 просмотр';
+  
+  info.append(title, channel, meta);
+  card.append(thumb, info);
+  
+  card.onclick = () => playVideo(url, file.name);
+  
+  grid.prepend(card);
+  
+  videos.push({ url, name: file.name, card });
+}
+
+function playVideo(url, title) {
+  videoElement.src = url;
+  videoElement.title = title;
+  player.style.display = 'flex';
+  videoElement.play().catch(() => {});
+}
+
+function closePlayer(e) {
+  if (e.target === player || e.target === videoElement) {
+    player.style.display = 'none';
+    videoElement.pause();
+    videoElement.src = '';
+  }
+}
+
+document.getElementById('video-file').onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('video/')) {
+    alert('Выберите видеофайл');
+    return;
+  }
+  addVideo(file);
+  e.target.value = ''; // чтобы можно было загрузить тот же файл повторно
+};
+
+// Пример: можно сразу добавить тестовое видео, если хочешь
+// addVideo(new File([], "test.mp4")); // заглушка
+
+</script>
+</body>
+</html>
